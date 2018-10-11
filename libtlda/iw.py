@@ -20,6 +20,16 @@ class ImportanceWeightedClassifier(object):
 
     Methods contain different importance-weight estimators and different loss
     functions.
+
+    Examples
+    --------
+    | >>>> X = np.random.randn(10, 2)
+    | >>>> y = np.vstack((-np.ones((5,)), np.ones((5,))))
+    | >>>> Z = np.random.randn(10, 2)
+    | >>>> clf = ImportanceWeightedClassifier()
+    | >>>> clf.fit(X, y, Z)
+    | >>>> u_pred = clf.predict(Z)
+
     """
 
     def __init__(self, loss='logistic', l2=1.0, iwe='lr', smoothing=True,
@@ -27,21 +37,33 @@ class ImportanceWeightedClassifier(object):
         """
         Select a particular type of importance-weighted classifier.
 
-        INPUT   (1) str 'loss': loss function for weighted classifier, options:
-                    'logistic', 'quadratic', 'hinge' (def: 'logistic')
-                (2) float 'l2': l2-regularization parameter value (def:0.01)
-                (3) str 'iwe': importance weight estimator, options: 'lr',
-                    'nn', 'rg', 'kmm', 'kde' (def: 'lr')
-                (4) boolean 'smoothing': whether to apply Laplace smoothing to
-                    the nearest-neighbour importance-weight estimator
-                    (def: True)
-                (5) float 'clip': maximum allowable importance-weight value; if
-                    set to -1, then the weights are not clipped (def:-1)
-                (6) str 'kernel_type': what type of kernel to use for kernel
-                    density estimation or kernel mean matching, options:
-                    'diste', 'rbf' (def: 'rbf')
-                (7) float 'bandwidth': kernel bandwidth parameter value for
-                    kernel-based weight estimators (def: 1)
+        Parameters
+        ----------
+        loss : str
+            loss function for weighted classifier, options: 'logistic',
+            'quadratic', 'hinge' (def: 'logistic')
+        l2 : float
+            l2-regularization parameter value (def:0.01)
+        iwe : str
+            importance weight estimator, options: 'lr', 'nn', 'rg', 'kmm',
+            'kde' (def: 'lr')
+        smoothing : bool
+            whether to apply Laplace smoothing to the nearest-neighbour
+            importance-weight estimator (def: True)
+        clip : float
+            maximum allowable importance-weight value; if set to -1, then the
+            weights are not clipped (def:-1)
+        kernel_type : str
+            what type of kernel to use for kernel density estimation or kernel
+            mean matching, options: 'diste', 'rbf' (def: 'rbf')
+        bandwidth : float
+            kernel bandwidth parameter value for kernel-based weight
+            estimators (def: 1)
+
+        Returns
+        -------
+        None
+
         """
         self.loss = loss
         self.l2 = l2
@@ -63,7 +85,7 @@ class ImportanceWeightedClassifier(object):
             self.clf = LinearSVC()
         else:
             # Other loss functions are not implemented
-            raise NotImplementedError
+            raise NotImplementedError('Loss function not implemented.')
 
         # Whether model has been trained
         self.is_trained = False
@@ -75,16 +97,26 @@ class ImportanceWeightedClassifier(object):
         """
         Estimate importance weights based on a ratio of Gaussian distributions.
 
-        INPUT   (1) array 'X': source data (N samples by D features)
-                (2) array 'Z': target data (M samples by D features)
-        OUTPUT  (1) array: importance weights (N samples by 1)
+        Parameters
+        ----------
+        X : array
+            source data (N samples by D features)
+        Z : array
+            target data (M samples by D features)
+
+        Returns
+        -------
+        iw : array
+            importance weights (N samples by 1)
+
         """
         # Data shapes
         N, DX = X.shape
         M, DZ = Z.shape
 
         # Assert equivalent dimensionalities
-        assert DX == DZ
+        if not DX == DZ:
+            raise ValueError('Dimensionalities of X and Z should be equal.')
 
         # Sample means in each domain
         mu_X = np.mean(X, axis=0)
@@ -113,9 +145,11 @@ class ImportanceWeightedClassifier(object):
         pT = st.multivariate_normal.pdf(X, mu_Z, Si_Z)
         pS = st.multivariate_normal.pdf(X, mu_X, Si_X)
 
-        # Check for numerics
-        assert not np.any(np.isnan(pT)) or np.any(pT == 0)
-        assert not np.any(np.isnan(pS)) or np.any(pS == 0)
+        # Check for numerical problems
+        if np.any(np.isnan(pT)) or np.any(pT == 0):
+            raise ValueError('Source probabilities are NaN or 0.')
+        if np.any(np.isnan(pS)) or np.any(pS == 0):
+            raise ValueError('Target probabilities are NaN or 0.')
 
         # Return the ratio of probabilities
         return pT / pS
@@ -124,24 +158,36 @@ class ImportanceWeightedClassifier(object):
         """
         Estimate importance weights based on kernel density estimation.
 
-        INPUT   (1) array 'X': source data (N samples by D features)
-                (2) array 'Z': target data (M samples by D features)
-        OUTPUT  (1) array: importance weights (N samples by 1)
+        Parameters
+        ----------
+        X : array
+            source data (N samples by D features)
+        Z : array
+            target data (M samples by D features)
+
+        Returns
+        -------
+        array
+            importance weights (N samples by 1)
+
         """
         # Data shapes
         N, DX = X.shape
         M, DZ = Z.shape
 
         # Assert equivalent dimensionalities
-        assert DX == DZ
+        if not DX == DZ:
+            raise ValueError('Dimensionalities of X and Z should be equal.')
 
         # Compute probabilities based on source kernel densities
         pT = st.gaussian_kde(Z.T).pdf(X.T)
         pS = st.gaussian_kde(X.T).pdf(X.T)
 
-        # Check for numerics
-        assert not np.any(np.isnan(pT)) or np.any(pT == 0)
-        assert not np.any(np.isnan(pS)) or np.any(pS == 0)
+        # Check for numerical problems
+        if np.any(np.isnan(pT)) or np.any(pT == 0):
+            raise ValueError('Source probabilities are NaN or 0.')
+        if np.any(np.isnan(pS)) or np.any(pS == 0):
+            raise ValueError('Target probabilities are NaN or 0.')
 
         # Return the ratio of probabilities
         return pT / pS
@@ -150,16 +196,26 @@ class ImportanceWeightedClassifier(object):
         """
         Estimate importance weights based on logistic regression.
 
-        INPUT   (1) array 'X': source data (N samples by D features)
-                (2) array 'Z': target data (M samples by D features)
-        OUTPUT  (1) array: importance weights (N samples by 1)
+        Parameters
+        ----------
+        X : array
+            source data (N samples by D features)
+        Z : array
+            target data (M samples by D features)
+
+        Returns
+        -------
+        array
+            importance weights (N samples by 1)
+
         """
         # Data shapes
         N, DX = X.shape
         M, DZ = Z.shape
 
         # Assert equivalent dimensionalities
-        assert DX == DZ
+        if not DX == DZ:
+            raise ValueError('Dimensionalities of X and Z should be equal.')
 
         # Make domain-label variable
         y = np.concatenate((np.zeros((N, 1)),
@@ -181,16 +237,26 @@ class ImportanceWeightedClassifier(object):
         """
         Estimate importance weights based on nearest-neighbours.
 
-        INPUT   (1) array 'X': source data (N samples by D features)
-                (2) array 'Z': target data (M samples by D features)
-        OUTPUT  (1) array: importance weights (N samples by 1)
+        Parameters
+        ----------
+        X : array
+            source data (N samples by D features)
+        Z : array
+            target data (M samples by D features)
+
+        Returns
+        -------
+        iw : array
+            importance weights (N samples by 1)
+
         """
         # Data shapes
         N, DX = X.shape
         M, DZ = Z.shape
 
         # Assert equivalent dimensionalities
-        assert DX == DZ
+        if not DX == DZ:
+            raise ValueError('Dimensionalities of X and Z should be equal.')
 
         # Compute Euclidean distance between samples
         d = cdist(X, Z, metric='euclidean')
@@ -214,24 +280,36 @@ class ImportanceWeightedClassifier(object):
         """
         Estimate importance weights based on kernel mean matching.
 
-        INPUT   (1) array 'X': source data (N samples by D features)
-                (2) array 'Z': target data (M samples by D features)
-        OUTPUT  (1) array: importance weights (N samples by 1)
+        Parameters
+        ----------
+        X : array
+            source data (N samples by D features)
+        Z : array
+            target data (M samples by D features)
+
+        Returns
+        -------
+        iw : array
+            importance weights (N samples by 1)
+
         """
         # Data shapes
         N, DX = X.shape
         M, DZ = Z.shape
 
         # Assert equivalent dimensionalities
-        assert DX == DZ
+        if not DX == DZ:
+            raise ValueError('Dimensionalities of X and Z should be equal.')
 
         # Compute sample pairwise distances
         KXX = cdist(X, X, metric='euclidean')
         KXZ = cdist(X, Z, metric='euclidean')
 
-        # Assert non-negative distances
-        assert np.all(KXX >= 0)
-        assert np.all(KXZ >= 0)
+        # Check non-negative distances
+        if not np.all(KXX >= 0):
+            raise ValueError('Non-positive distance in source kernel.')
+        if not np.all(KXZ >= 0):
+            raise ValueError('Non-positive distance in source-target kernel.')
 
         # Compute kernels
         if self.kernel_type == 'rbf':
@@ -261,17 +339,27 @@ class ImportanceWeightedClassifier(object):
         """
         Fit/train an importance-weighted classifier.
 
-        INPUT   (1) array 'X': source data (N samples by D features)
-                (2) array 'y': source labels (N samples by 1)
-                (3) array 'Z': target data (M samples by D features)
-        OUTPUT  None
+        Parameters
+        ----------
+        X : array
+            source data (N samples by D features)
+        y : array
+            source labels (N samples by 1)
+        Z : array
+            target data (M samples by D features)
+
+        Returns
+        -------
+        None
+
         """
         # Data shapes
         N, DX = X.shape
         M, DZ = Z.shape
 
         # Assert equivalent dimensionalities
-        assert DX == DZ
+        if not DX == DZ:
+            raise ValueError('Dimensionalities of X and Z should be equal.')
 
         # Find importance-weights
         if self.iwe == 'lr':
@@ -285,21 +373,17 @@ class ImportanceWeightedClassifier(object):
         elif self.iwe == 'kmm':
             w = self.iwe_kernel_mean_matching(X, Z)
         else:
-            raise NotImplementedError
+            raise NotImplementedError('Estimator not implemented.')
 
         # Train a weighted classifier
-        if self.loss == 'logistic':
-            # Logistic regression model with sample weights
+        if self.loss in ['logistic', 'quadratic', 'hinge']:
+
+            # Fit classifier with sample weights
             self.clf.fit(X, y, w)
-        elif self.loss == 'quadratic':
-            # Least-squares model with sample weights
-            self.clf.fit(X, y, w)
-        elif self.loss == 'hinge':
-            # Linear support vector machine with sample weights
-            self.clf.fit(X, y, w)
+
         else:
             # Other loss functions are not implemented
-            raise NotImplementedError
+            raise NotImplementedError('Loss function not implemented.')
 
         # Mark classifier as trained
         self.is_trained = True
@@ -307,22 +391,32 @@ class ImportanceWeightedClassifier(object):
         # Store training data dimensionality
         self.train_data_dim = DX
 
-    def predict(self, Z_):
+    def predict(self, Z):
         """
         Make predictions on new dataset.
 
-        INPUT   (1) array 'Z_': new data set (M samples by D features)
-        OUTPUT  (2) array 'preds': label predictions (M samples by 1)
+        Parameters
+        ----------
+        Z : array
+            new data set (M samples by D features)
+
+        Returns
+        -------
+        preds : array
+            label predictions (M samples by 1)
+
         """
         # Data shape
-        M, D = Z_.shape
+        M, D = Z.shape
 
         # If classifier is trained, check for same dimensionality
         if self.is_trained:
-            assert self.train_data_dim == D
+            if not self.train_data_dim == D:
+                raise ValueError('''Test data is of different dimensionality
+                                 than training data.''')
 
         # Call scikit's predict function
-        preds = self.clf.predict(Z_)
+        preds = self.clf.predict(Z)
 
         # For quadratic loss function, correct predictions
         if self.loss == 'quadratic':
@@ -330,6 +424,43 @@ class ImportanceWeightedClassifier(object):
 
         # Return predictions array
         return preds
+
+    def predict_proba(self, Z):
+        """
+        Compute posterior probabilities on new dataset.
+
+        Parameters
+        ----------
+        Z : array
+            new data set (M samples by D features)
+
+        Returns
+        -------
+        probs : array
+            label predictions (M samples by K)
+
+        """
+        # Data shape
+        M, D = Z.shape
+
+        # If classifier is trained, check for same dimensionality
+        if self.is_trained:
+            if not self.train_data_dim == D:
+                raise ValueError('''Test data is of different dimensionality
+                                 than training data.''')
+
+        # Call scikit's predict function
+        if self.loss in ['logistic']:
+
+            # Use scikit's predict_proba for posterior probabilities
+            probs = self.clf.predict_proba(Z)
+
+        else:
+            raise NotImplementedError('''Posterior probabilities for quadratic
+                                      and hinge losses not implemented yet.''')
+
+        # Return posterior probabilities array
+        return probs
 
     def get_params(self):
         """Get classifier parameters."""

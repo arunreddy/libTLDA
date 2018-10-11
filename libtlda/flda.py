@@ -12,7 +12,7 @@ from sklearn.linear_model import LogisticRegression, LinearRegression
 from sklearn.model_selection import cross_val_predict
 from os.path import basename
 
-from .util import is_pos_def, one_not
+from .util import is_pos_def, one_hot
 
 
 class FeatureLevelDomainAdaptiveClassifier(object):
@@ -30,17 +30,27 @@ class FeatureLevelDomainAdaptiveClassifier(object):
         """
         Set classifier instance parameters.
 
-        INPUT   (1) float 'l2': l2-regularization parameter value (def:0.01)
-                (2) str 'loss': loss function for classifier, options are
-                    'logistic' or 'quadratic' (def: 'logistic')
-                (3) str 'transfer_model': distribution to use for transfer
-                    model, options are 'dropout' and 'blankout'
-                    (def: 'blankout')
-                (4) int 'max_iter': maximum number of iterations (def: 100)
-                (5) float 'tolerance': convergence criterion threshold on x
-                    (def: 1e-5)
-                (7) boolean 'verbose': report training progress (def: True)
-        OUTPUT  None
+        Parameters
+        ----------
+        l2 : float
+            l2-regularization parameter value (def:0.01)
+        loss : str
+            loss function for classifier, options are 'logistic' or 'quadratic'
+            (def: 'logistic')
+        transfer_model : str
+            distribution to use for transfer model, options are 'dropout' and
+            'blankout' (def: 'blankout')
+        max_iter : int
+            maximum number of iterations (def: 100)
+        tolerance : float
+            convergence criterion threshold on x (def: 1e-5)
+        verbose : bool
+            report training progress (def: True)
+
+        Returns
+        -------
+        None
+
         """
         # Classifier choices
         self.l2 = l2
@@ -67,19 +77,29 @@ class FeatureLevelDomainAdaptiveClassifier(object):
         """
         Maximum likelihood estimation of transfer model parameters.
 
-        INPUT   (1) array 'X': source data set (N samples by D features)
-                (2) array 'Z': target data set (M samples by D features)
-                (3) str 'dist': distribution of transfer model, options are
-                    'blankout' or 'dropout' (def: 'blankout')
-        OUTPUT  (1) array 'iota': estimated transfer model parameters
-                    (D features by 1)
+        Parameters
+        ----------
+        X : array
+            source data set (N samples by D features)
+        Z : array
+            target data set (M samples by D features)
+        dist : str
+            distribution of transfer model, options are 'blankout' or 'dropout'
+            (def: 'blankout')
+
+        Returns
+        -------
+        iota : array
+            estimated transfer model parameters (D features by 1)
+
         """
         # Data shapes
         N, DX = X.shape
         M, DZ = Z.shape
 
         # Assert equivalent dimensionalities
-        assert DX == DZ
+        if not DX == DZ:
+            raise ValueError('Dimensionalities of X and Z should be equal.')
 
         # Blankout and dropout have same maximum likelihood estimator
         if (dist == 'blankout') or (dist == 'dropout'):
@@ -100,14 +120,23 @@ class FeatureLevelDomainAdaptiveClassifier(object):
         """
         Moments of the transfer model.
 
-        INPUT   (1) array 'X': data set (N samples by D features)
-                (2) array 'iota': transfer model parameters (D samples by 1)
-                (3) str 'dist': transfer model, options are 'dropout' and
-                    'blankout' (def: 'blankout')
-        OUTPUT  (1) array 'E': expected value of transfer model (N samples by
-                    D feautures)
-                (2) array 'V': variance of transfer model (D features by D
-                    features by N samples)
+        Parameters
+        ----------
+        X : array
+            data set (N samples by D features)
+        iota : array
+            transfer model parameters (D samples by 1)
+        dist : str
+            transfer model, options are 'dropout' and 'blankout'
+            (def: 'blankout')
+
+        Returns
+        -------
+        E : array
+            expected value of transfer model (N samples by D feautures)
+        V : array
+            variance of transfer model (D features by D features by N samples)
+
         """
         # Data shape
         N, D = X.shape
@@ -133,7 +162,7 @@ class FeatureLevelDomainAdaptiveClassifier(object):
                 V[:, :, i] = np.diag(iota * (1-iota)) * (X[i, :].T * X[i, :])
 
         else:
-            raise ValueError('Transfer distribution not implemented')
+            raise NotImplementedError('Transfer distribution not implemented')
 
         return E, V
 
@@ -141,21 +170,35 @@ class FeatureLevelDomainAdaptiveClassifier(object):
         """
         Compute average loss for flda-log.
 
-        INPUT   (1) array 'theta': classifier parameters (D features by 1)
-                (2) array 'X': source data set ()
-                (3) array 'y': label vector (N samples by 1)
-                (4) array 'E': expected value with respect to transfer model
-                    (N samples by D features)
-                (5) array 'V': variance with respect to transfer model
-                    (D features by D features by N samples)
-                (6) float 'l2': regularization parameter (def: 0.0)
-        OUTPUT  (1) float 'L': loss function value
+        Parameters
+        ----------
+        theta : array
+            classifier parameters (D features by 1)
+        X : array
+            source data set (N samples by D features)
+        y : array
+            label vector (N samples by 1)
+        E : array
+            expected value with respect to transfer model (N samples by
+            D features)
+        V : array
+            variance with respect to transfer model (D features by D features
+            by N samples)
+        l2 : float
+            regularization parameter (def: 0.0)
+
+        Returns
+        -------
+        dL : array
+            Value of loss function.
+
         """
         # Data shape
         N, D = X.shape
 
         # Assert y in {-1,+1}
-        assert np.all(np.sort(np.unique(y)) == (-1, 1))
+        if not np.all(np.sort(np.unique(y)) == (-1, 1)):
+            raise NotImplementedError('Labels can only be {-1, +1} for now.')
 
         # Precompute terms
         Xt = np.dot(X, theta)
@@ -190,21 +233,35 @@ class FeatureLevelDomainAdaptiveClassifier(object):
         """
         Compute gradient with respect to theta for flda-log.
 
-        INPUT   (1) array 'theta': classifier parameters (D features by 1)
-                (2) array 'X': source data set ()
-                (3) array 'y': label vector (N samples by 1)
-                (4) array 'E': expected value with respect to transfer model
-                    (N samples by D features)
-                (5) array 'V': variance with respect to transfer model
-                    (D features by D features by N samples)
-                (6) float 'l2': regularization parameter (def: 0.0)
-        OUTPUT  (1) float
+        Parameters
+        ----------
+        theta : array
+            classifier parameters (D features by 1)
+        X : array
+            source data set (N samples by D features)
+        y : array
+            label vector (N samples by 1)
+        E : array
+            expected value with respect to transfer model (N samples by
+            D features)
+        V : array
+            variance with respect to transfer model (D features by D features
+            by N samples)
+        l2 : float
+            regularization parameter (def: 0.0)
+
+        Returns
+        -------
+        dR : array
+            Value of gradient.
+
         """
         # Data shape
         N, D = X.shape
 
         # Assert y in {-1,+1}
-        assert np.all(np.sort(np.unique(y)) == (-1, 1))
+        if not np.all(np.sort(np.unique(y)) == (-1, 1)):
+            raise NotImplementedError('Labels can only be {-1, +1} for now.')
 
         # Precompute common terms
         Xt = np.dot(X, theta)
@@ -253,23 +310,33 @@ class FeatureLevelDomainAdaptiveClassifier(object):
         """
         Fit/train a robust bias-aware classifier.
 
-        INPUT   (1) array 'X': source data (N samples by D features)
-                (2) array 'y': source labels (N samples by 1)
-                (3) array 'Z': target data (M samples by D features)
-        OUTPUT  None
+        Parameters
+        ----------
+        X : array
+            source data (N samples by D features)
+        y : array
+            source labels (N samples by 1)
+        Z : array
+            target data (M samples by D features)
+
+        Returns
+        -------
+        None
+
         """
         # Data shapes
         N, DX = X.shape
         M, DZ = Z.shape
 
         # Assert equivalent dimensionalities
-        assert DX == DZ
+        if not DX == DZ:
+            raise ValueError('Dimensionalities of X and Z should be equal.')
+
+        # Map to one-not-encoding
+        Y, labels = one_hot(y, one_not=True)
 
         # Number of classes
-        K = len(np.unique(y))
-
-        # Map to one-not-encoding (label vector to label array)
-        Y = one_not(y)
+        K = len(labels)
 
         # Compute transfer distribution parameters
         iota = self.mle_transfer_dist(X, Z)
@@ -311,6 +378,9 @@ class FeatureLevelDomainAdaptiveClassifier(object):
         # Store trained classifier parameters
         self.theta = theta
 
+        # Store classes
+        self.classes = labels
+
         # Mark classifier as trained
         self.is_trained = True
 
@@ -321,20 +391,31 @@ class FeatureLevelDomainAdaptiveClassifier(object):
         """
         Make predictions on new dataset.
 
-        INPUT   (1) array 'Z_': new data set (M samples by D features)
-        OUTPUT  (1) array 'preds': label predictions (M samples by 1)
+        Parameters
+        ----------
+        Z : array
+            new data set (M samples by D features)
+
+        Returns
+        -------
+        preds : array
+            label predictions (M samples by 1)
+
         """
         # Data shape
         M, D = Z_.shape
 
         # If classifier is trained, check for same dimensionality
         if self.is_trained:
-            assert self.train_data_dim == D
-        else:
-            raise UserWarning('Classifier is not trained yet.')
+            if not self.train_data_dim == D:
+                raise ValueError('''Test data is of different dimensionality
+                                 than training data.''')
 
         # Predict target labels
         preds = np.argmax(np.dot(Z_, self.theta), axis=1)
+
+        # Map predictions back to labels
+        preds = self.classes[preds]
 
         # Return predictions array
         return preds

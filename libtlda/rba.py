@@ -25,24 +25,46 @@ class RobustBiasAwareClassifier(object):
     """
 
     def __init__(self, l2=0.0, order='first', gamma=1.0, tau=1e-5,
-                 max_iter=100, clip=1000, verbose=True):
+                 learning_rate=1.0, rate_decay='linear', max_iter=100,
+                 clip=1000, verbose=True):
         """
         Set classifier instance parameters.
 
-        INPUT   (1) float 'l2': l2-regularization parameter value (def:0.01)
-                (2) str 'order': order of feature statistics to employ; options
-                    are 'first', or 'second' (def: 'first')
-                (3) float 'gamma': decaying learning rate (def: 1.0)
-                (4) float 'tau': convergence threshold (def: 1e-5)
-                (5) int 'max_iter': maximum number of iterations (def: 100)
-                (6) int 'clip': upper bound on importance weights (def: 1000)
-                (7) boolean 'verbose': report training progress (def: True)
-        OUTPUT  None
+        Parameters
+        ----------
+        l2 : float
+            l2-regularization parameter value (def:0.01)
+        order : str
+            order of feature statistics to employ; options are 'first', or
+            'second' (def: 'first')
+        gamma : float
+            decaying learning rate (def: 1.0)
+        tau : float
+            convergence threshold (def: 1e-5)
+        learning_rate : float
+            learning rate starting value (def: 1.0)
+        rate_decay : str
+            how fast the learning rate decays over iterations,
+            options: 'linear', 'quadratic', 'geometric', 'exponential'
+            (def: linear)
+        max_iter : int
+            maximum number of iterations (def: 100)
+        clip : float
+            upper bound on importance weights (def: 1000.)
+        verbose : bool
+            report training progress (def: True)
+
+        Returns
+        -------
+        None
+
         """
         self.l2 = l2
         self.order = order
         self.gamma = gamma
         self.tau = tau
+        self.learning_rate = learning_rate
+        self.rate_decay = rate_decay
         self.max_iter = max_iter
         self.clip = clip
 
@@ -62,9 +84,18 @@ class RobustBiasAwareClassifier(object):
         """
         Compute first-order moment feature statistics.
 
-        INPUT   (1) array 'X': dataset (N samples by D features)
-                (2) array 'y': label vector (N samples by 1)
-        OUTPUT  (1) array
+        Parameters
+        ----------
+        X : array
+            dataset (N samples by D features)
+        y : array
+            label vector (N samples by 1)
+
+        Returns
+        -------
+        array
+            array containing label vector, feature moments and 1-augmentation.
+
         """
         # Data shape
         N, D = X.shape
@@ -92,13 +123,24 @@ class RobustBiasAwareClassifier(object):
         # Concatenate label vector, moments, and ones-augmentation
         return np.concatenate((y, mom, np.ones((N, 1))), axis=1)
 
-    def iwe_kernel_densities(self, X, Z):
+    def iwe_kernel_densities(self, X, Z, clip=1000):
         """
         Estimate importance weights based on kernel density estimation.
 
-        INPUT   (1) array 'X': source data (N samples by D features)
-                (2) array 'Z': target data (M samples by D features)
-        OUTPUT  (1) array: importance weights (N samples by 1)
+        Parameters
+        ----------
+        X : array
+            source data (N samples by D features)
+        Z : array
+            target data (M samples by D features)
+        clip : float
+            maximum allowed value for individual weights (def: 1000)
+
+        Returns
+        -------
+        array
+            importance weights (N samples by 1)
+
         """
         # Data shapes
         N, DX = X.shape
@@ -115,18 +157,32 @@ class RobustBiasAwareClassifier(object):
         assert not np.any(np.isnan(pT)) or np.any(pT == 0)
         assert not np.any(np.isnan(pS)) or np.any(pS == 0)
 
-        # Return the ratio of probabilities
-        return pT / pS
+        # Compute importance weights
+        iw = pT / pS
+
+        # Clip importance weights
+        return np.minimum(clip, np.maximum(0, iw))
 
     def psi(self, X, theta, w, K=2):
         """
         Compute psi function.
 
-        INPUT   (1) array 'X': data set (N samples by D features)
-                (2) array 'theta': classifier parameters (D features by 1)
-                (3) array 'w': importance-weights (N samples by 1)
-                (4) int 'K': number of classes (def: 2)
-        OUTPUT  (1) array 'psi' (N samples by K classes)
+        Parameters
+        ----------
+        X : array
+            data set (N samples by D features)
+        theta : array
+            classifier parameters (D features by 1)
+        w : array
+            importance-weights (N samples by 1)
+        K : int
+            number of classes (def: 2)
+
+        Returns
+        -------
+        psi : array
+            array with psi function values (N samples by K classes)
+
         """
         # Number of samples
         N = X.shape[0]
@@ -148,10 +204,16 @@ class RobustBiasAwareClassifier(object):
         """
         Class-posterior estimation.
 
-        INPUT   (1) array 'psi': weighted data-classifier output (N samples by
-                    K classes)
-        OUTPUT  (1) array 'pyx': class-posterior estimation (N samples by
-                    K classes)
+        Parameters
+        ----------
+        psi : array
+            weighted data-classifier output (N samples by K classes)
+
+        Returns
+        -------
+        pyx : array
+            class-posterior estimation (N samples by K classes)
+
         """
         # Data shape
         N, K = psi.shape
@@ -170,21 +232,72 @@ class RobustBiasAwareClassifier(object):
 
         return pyx
 
+    def learning_rate_t(self, t):
+        """
+        Compute current learning rate after decay.
+
+        Parameters
+        ----------
+        t : int
+            current iteration
+
+        Returns
+        -------
+        alpha : float
+            current learning rate
+
+        """
+        # Select rate decay
+        if self.rate_decay == 'linear':
+
+            # Linear dropoff between t=0 and t=T
+            alpha = (self.max_iter - t)/(self.learning_rate*self.max_iter)
+
+        elif self.rate_decay == 'quadratic':
+
+            # Quadratic dropoff between t=0 and t=T
+            alpha = ((self.max_iter - t)/(self.learning_rate*self.max_iter))**2
+
+        elif self.rate_decay == 'geometric':
+
+            # Drop rate off inversely to time
+            alpha = 1 / (self.learning_rate * t)
+
+        elif self.rate_decay == 'exponential':
+
+            # Exponential dropoff
+            alpha = np.exp(-self.learning_rate * t)
+
+        else:
+            raise ValueError('Rate decay type unknown.')
+
+        return alpha
+
     def fit(self, X, y, Z):
         """
         Fit/train a robust bias-aware classifier.
 
-        INPUT   (1) array 'X': source data (N samples by D features)
-                (2) array 'y': source labels (N samples by 1)
-                (3) array 'Z': target data (M samples by D features)
-        OUTPUT  None
+        Parameters
+        ----------
+        X : array
+            source data (N samples by D features)
+        y : array
+            source labels (N samples by 1)
+        Z : array
+            target data (M samples by D features)
+
+        Returns
+        -------
+        None
+
         """
         # Data shapes
         N, DX = X.shape
         M, DZ = Z.shape
 
         # Number of classes
-        self.K = len(np.unique(y))
+        labels = np.unique(y)
+        self.K = len(labels)
 
         # Assert equivalent dimensionalities
         assert DX == DZ
@@ -234,8 +347,11 @@ class RobustBiasAwareClassifier(object):
             # Gradient computation and regularization
             dL = c - np.mean(pfs, axis=0) + self.l2*2*theta
 
+            # Compute learning rate
+            alpha = self.learning_rate_t(t)
+
             # Apply learning rate to gradient
-            dT = dL / (t * self.gamma)
+            dT = alpha * dL
 
             # Update classifier parameters
             theta += dT
@@ -244,15 +360,18 @@ class RobustBiasAwareClassifier(object):
             if self.verbose:
                 if (t % (self.max_iter / 10)) == 1:
                     print('Iteration {:03}/{:03} - Norm gradient: {:.12}'
-                          .format(t, self.max_iter, np.linalg.norm(dL)))
+                          .format(t, self.max_iter, np.linalg.norm(dT)))
 
             # Check for convergence
-            if (np.linalg.norm(dL) <= self.tau):
+            if (np.linalg.norm(dT) <= self.tau):
                 print('Broke at {}'.format(t))
                 break
 
         # Store resultant classifier parameters
         self.theta = theta
+
+        # Store classes
+        self.classes = labels
 
         # Mark classifier as trained
         self.is_trained = True
@@ -260,33 +379,68 @@ class RobustBiasAwareClassifier(object):
         # Store training data dimensionality
         self.train_data_dim = DX
 
-    def predict(self, Z_):
+    def predict(self, Z):
         """
         Make predictions on new dataset.
 
-        INPUT   (1) array 'Z_': new data set (M samples by D features)
-        OUTPUT  (1) array 'preds': label predictions (M samples by 1)
+        Parameters
+        ----------
+        Z : array
+            new data set (M samples by D features)
+
+        Returns
+        -------
+        preds : array
+            label predictions (M samples by 1)
+
         """
         # Data shape
-        M, D = Z_.shape
+        M, D = Z.shape
 
         # If classifier is trained, check for same dimensionality
         if self.is_trained:
-            assert self.train_data_dim == D
-        else:
-            raise UserWarning('Classifier is not trained yet.')
+            if not self.train_data_dim == D:
+                raise ValueError('''Test data is of different dimensionality
+                                 than training data.''')
 
-        # Calculate psi function for target samples
-        psi = self.psi(Z_, self.theta.T, np.ones((M, 1)), K=self.K)
-
-        # Compute posteriors for target samples
-        pyz = self.posterior(psi)
+        # Compute posteriors
+        post = self.predict_proba(Z)
 
         # Predictions through max-posteriors
-        preds = np.argmax(pyz, axis=1)
+        preds = np.argmax(post, axis=1)
 
-        # Return predictions array
-        return preds
+        # Map predictions back to original labels
+        return self.classes[preds]
+
+    def predict_proba(self, Z):
+        """
+        Compute posteriors on new dataset.
+
+        Parameters
+        ----------
+        Z : array
+            new data set (M samples by D features)
+
+        Returns
+        -------
+        preds : array
+            label predictions (M samples by 1)
+
+        """
+        # Data shape
+        M, D = Z.shape
+
+        # If classifier is trained, check for same dimensionality
+        if self.is_trained:
+            if not self.train_data_dim == D:
+                raise ValueError('''Test data is of different dimensionality
+                                 than training data.''')
+
+        # Calculate psi function for target samples
+        psi = self.psi(Z, self.theta.T, np.ones((M, 1)), K=self.K)
+
+        # Compute posteriors for target samples
+        return self.posterior(psi)
 
     def get_params(self):
         """Get classifier parameters."""
